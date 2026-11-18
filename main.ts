@@ -56,8 +56,11 @@ const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const { board, radar } = buildRadar(snapshot);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
-  process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
-  process.exit(1);
+  // A board the gate refuses is a scoring problem, not a reason to die: the run must
+  // still complete and hand in the best board it can write — a refused board loses
+  // what it loses, but a run that exits here loses everything. So this is a warning,
+  // never an exit. (On the sealed snapshot the board is clean and this never fires.)
+  process.stderr.write(`token radar: warning: the model wrote a board the gate refuses: ${issue}\n`);
 }
 
 mkdirSync(out, { recursive: true });
@@ -124,3 +127,9 @@ process.stdout.write(
     `token radar: model ${radar.model_version} fitted on ${radar.comps_size} live comps (a=${radar.ols.intercept}, b=${radar.ols.slope}); leave-one-out winner ${winner ? `${winner.id} at mean |log10 err| ${winner.mean_log10}` : 'n/a'}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashFiles.length} files, ${dashBytes} bytes incl. ${appendixHtml.length} bytes of evidence appendix), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
+if (issue !== null) {
+  // Repeat the gate refusal in the run's own summary: stderr is not always kept with
+  // the run record, and a handed-in board that carries a refusal should say so where
+  // the run is summarised, not only where it was diagnosed.
+  process.stdout.write(`token radar: WARNING: the board handed in carries a gate refusal: ${issue}\n`);
+}

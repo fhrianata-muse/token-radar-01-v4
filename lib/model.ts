@@ -1340,7 +1340,8 @@ export function farmEconomics(p: SnapshotProtocol, implied: number): FarmEcon {
   const { chain, cost } = costChainFor(p);
   const txs = SETUP_TXS + ACTION_TXS + mech.weekly_txs * ECON.weeks + EXIT_TXS;
   const hours = (mech.setup_min + mech.weekly_min * ECON.weeks) / 60;
-  const slice = round2(ECON.drop_share * implied * (ECON.deposit_usd / p.tvl_usd));
+  // A pro-rata slice of a zero-TVL protocol is zero, not Infinity: guard the division.
+  const slice = p.tvl_usd > 0 ? round2(ECON.drop_share * implied * (ECON.deposit_usd / p.tvl_usd)) : 0;
   const fees = round2(txs * cost);
   const net = round2(slice - fees - FORGONE_USD);
   return {
@@ -1487,7 +1488,7 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     age_days: s.age,
     implied_value_usd: s.implied,
     model: {
-      base_multiple: round4(s.base / s.p.tvl_usd),
+      base_multiple: round4(s.p.tvl_usd > 0 ? s.base / s.p.tvl_usd : 0),
       growth_pct: s.p.change_7d === null ? 0 : Math.round(clamp(s.p.change_7d, -60, 120) * 100) / 100,
       growth_multiplier: round4(s.growth),
       maturity_multiplier: round4(s.maturity),
@@ -1534,6 +1535,13 @@ export const BOOTSTRAP_SEED = 20261118;
  */
 export function bootstrapRankRanges(board: BoardRow[], snapshot: Snapshot): Map<string, { lo: number; hi: number }> {
   const comps = liveComps(snapshot);
+  if (comps.length === 0) {
+    // Nothing to resample: the honest range is the rank itself, and sampling an empty
+    // comp set would index it at NaN and dereference undefined.
+    const out = new Map<string, { lo: number; hi: number }>();
+    for (const r of board) out.set(r.slug, { lo: r.rank, hi: r.rank });
+    return out;
+  }
   const index = bySlug(snapshot.protocols);
   const rows = board.map((r) => index.get(r.slug)).filter((p): p is SnapshotProtocol => p !== undefined);
   const seen = new Map<string, number[]>();
@@ -1570,7 +1578,7 @@ const FORGONE_PER_DOLLAR = (ECON.forgone_rate * ECON.horizon_days) / 365;
  * the standard $1,000 / 10% this reproduces the row's printed FarmEcon to the cent.
  */
 function scenarioAt(row: RadarRow, deposit: number, share: number): { net_usd: number; breakeven_pct: number | null } {
-  const slice = round2(share * row.implied_value_usd * (deposit / row.tvl_usd));
+  const slice = row.tvl_usd > 0 ? round2(share * row.implied_value_usd * (deposit / row.tvl_usd)) : 0;
   const forgone = round2(deposit * FORGONE_PER_DOLLAR);
   const net = round2(slice - row.econ.fees_usd - forgone);
   return { net_usd: net, breakeven_pct: slice > 0 ? round1(((row.econ.fees_usd + forgone) / slice) * 100) : null };
@@ -1586,7 +1594,23 @@ function turnDeposit(row: RadarRow, share: number): number | null {
   const perDollar = (share * row.implied_value_usd) / row.tvl_usd;
   if (perDollar <= FORGONE_PER_DOLLAR) return null;
   let d = Math.max(1, Math.floor(row.econ.fees_usd / (perDollar - FORGONE_PER_DOLLAR)) - 2);
-  while (scenarioAt(row, d, share).net_usd < 0) d++;
+  let steps = 0;
+  while (scenarioAt(row, d, share).net_usd < 0) {
+    d++;
+    steps++;
+    if (steps >= 1_000_000) {
+      // The single-step search is exact but unbounded: where the slice per dollar barely
+      // clears the forgone yield, the cent-rounding band can stretch the walk past the
+      // runtime budget. Jump to the analytic crossing with a two-cent margin — wider
+      // than the rounding noise on slice plus forgone (half a cent each), so the net
+      // there is already non-negative and the walk below ends at once; the returned
+      // deposit can overshoot the exact first crossing by that margin's worth of
+      // dollars, and only on inputs whose exact walk would not have finished in time.
+      d = Math.max(d, Math.ceil((row.econ.fees_usd + 0.02) / (perDollar - FORGONE_PER_DOLLAR)));
+      while (scenarioAt(row, d, share).net_usd < 0) d++;
+      break;
+    }
+  }
   return d;
 }
 
@@ -1618,14 +1642,20 @@ export function farmSensitivity(rows: RadarRow[]): FarmSensitivity {
         SENSITIVITY_DEPOSITS.map((deposit) => ({ deposit_usd: deposit, share, ...scenarioAt(r, deposit, share) })),
       ),
     }));
-  const flagship = farm.reduce((a, b) => (b.econ.net_usd > a.econ.net_usd ? b : a), farm[0]!);
+  // A snapshot can put no researched-FARM protocol on the board at all (the verdicts live
+  // in the research table, and unresearched rows cap at THIN): then there is no flagship,
+  // and the conclusion says so instead of dereferencing an empty list.
+  const flagship = farm.length > 0 ? farm.reduce((a, b) => (b.econ.net_usd > a.econ.net_usd ? b : a), farm[0]!) : null;
   const negatives = farm.filter((r) => r.econ.net_usd < 0);
   const bySize = negatives.filter((r) => turn[r.slug]!.at10 !== null);
   const byDrop = negatives.filter((r) => turn[r.slug]!.at10 === null && turn[r.slug]!.at20 !== null);
   const never = negatives.filter((r) => turn[r.slug]!.at10 === null && turn[r.slug]!.at20 === null);
   const plainList = (rs: RadarRow[], share: 'at10' | 'at20'): string =>
     rs.map((r) => `${r.name} from ${fmtWholeUsd(turn[r.slug]![share]!)} up`).join(', ');
-  let conclusion = `${flagship.name} is positive at every deposit in the grid once the drop is 10%.`;
+  let conclusion =
+    flagship !== null
+      ? `${flagship.name} is positive at every deposit in the grid once the drop is 10%.`
+      : 'No row on this board carries a FARM verdict, so the grid has no turning points to read: every researched verdict here is THIN or SKIP, and unresearched rows cap at THIN by the stated rule.';
   if (bySize.length > 0) {
     conclusion +=
       ` Of the ${negatives.length} FARM rows the $1,000 scenario leaves negative, ${turnList(bySize, turn, 'at10')} ` +
@@ -1695,10 +1725,15 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   });
   const verdict_counts = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of rows) verdict_counts[r.verdict]++;
-  const classification_audit = Object.keys(PRODUCT_CORRECTIONS).map((slug) => {
-    const p = index.get(slug)!;
-    return { slug, name: p.name, category: p.category, reason: PRODUCT_CORRECTIONS[slug]! };
-  });
+  // Only corrections whose protocol this snapshot actually holds get an audit row: a
+  // snapshot that does not contain one of the three named protocols has nothing to
+  // correct, and dereferencing its absence would kill the whole run.
+  const classification_audit = Object.keys(PRODUCT_CORRECTIONS)
+    .filter((slug) => index.has(slug))
+    .map((slug) => {
+      const p = index.get(slug)!;
+      return { slug, name: p.name, category: p.category, reason: PRODUCT_CORRECTIONS[slug]! };
+    });
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
