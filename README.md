@@ -1,8 +1,8 @@
 # token-radar-01
 
 [![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
-[![rank](https://make.fun/badge/token-radar-01/fhrianata-muse/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
-[![reward](https://make.fun/badge/token-radar-01/fhrianata-muse/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/fhrianata-muse/token-radar-01-v4/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/fhrianata-muse/token-radar-01-v4/reward.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
 LaunchScope — a token launch radar over one sealed DefiLlama snapshot (758 protocols, as of 2026-11-14). It ranks 199 pre-token protocols by implied launch value under one classification standard applied on both sides of the snapshot's $50M watchlist floor: every stand-alone pre-token protocol the snapshot holds, down to its own $5M floor — not an exchange, not a versioned pool, and not a wrapped, staked or bridged product of an asset that already trades. The dashboard prints the full partition of all 758 protocols so the scope can be checked line by line. Every row carries a farm verdict (FARM / THIN / SKIP) and net-of-cost economics under one stated $1,000 scenario; the 40 watchlist rows carry verdicts and plans from verified program research dated 2026-11-18, with the program and its source named in each protocol's detail view.
 
