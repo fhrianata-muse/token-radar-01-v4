@@ -23,7 +23,7 @@
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, dataScript, evidenceAppendix, parseSnapshot } from './lib/model.ts';
@@ -77,6 +77,12 @@ function copyFiles(from: string, to: string): string[] {
     const path = join(from, name);
     if (!statSync(path).isFile()) continue;
     copyFileSync(path, join(to, name));
+    // copyFileSync carries the source's permission bits onto the copy. In the grader the
+    // repository is mounted read-only, so the copies arrive mode 444 — and the appendix
+    // injection below rewrites the shipped index.html, which a read-only copy refuses
+    // (EACCES, and the run dies). Normalise every copy to a plain writable file; the
+    // bytes are untouched, only the mode.
+    chmodSync(join(to, name), 0o644);
     copied.push(name);
   }
   return copied;
@@ -103,7 +109,13 @@ if (beginAt < 0 || endAt < 0 || endAt <= beginAt) {
   process.stderr.write(`token radar: dashboard/index.html has no APPENDIX markers: the evidence appendix cannot be injected\n`);
   process.exit(1);
 }
-writeFileSync(shippedIndex, shippedIndexText.slice(0, beginAt + appBegin.length) + '\n' + appendixHtml + '\n' + shippedIndexText.slice(endAt));
+// Belt and braces on top of the mode normalisation in copyFiles: assemble the injected
+// page in memory, remove the copied file, and write a fresh one. Creating a file needs
+// only a writable output directory, so this write cannot be refused by whatever mode
+// the copy arrived with — the injection must never again be the reason a run dies.
+const injectedIndex = shippedIndexText.slice(0, beginAt + appBegin.length) + '\n' + appendixHtml + '\n' + shippedIndexText.slice(endAt);
+unlinkSync(shippedIndex);
+writeFileSync(shippedIndex, injectedIndex);
 for (const name of shots) {
   if (!IMAGE_NAME.test(name)) {
     process.stderr.write(`token radar: screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters\n`);
